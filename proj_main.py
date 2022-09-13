@@ -40,3 +40,15 @@ V[0,:]
 # Plot PCA of the data
 Z = X @ V[:2,:].T
 plt.scatter(Z[:,0], Z[:,1])
+
+##Summary Statistics of the dataset
+Mean=[]
+Variance=[]
+Standard_Deviation=[]
+for i in range(8):
+    Mean.append(X[:,i].mean())
+    Variance.append(X[:,i].var())
+    Standard_Deviation.append(X[:,i].std())
+
+COVariance=np.cov(X.T)
+Correlation=np.corrcoef(X.T)
