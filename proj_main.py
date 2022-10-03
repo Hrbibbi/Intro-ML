@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import xlrd
 import scipy.linalg as linalg
+import array_to_latex as a2l
 # Load data from excel to np.array
 doc = xlrd.open_workbook('./Concrete_Data.xls').sheet_by_index(0)
 
@@ -37,18 +38,37 @@ for i in range(8):
 
 V[0,:]
 
+
+##
+rho = (S*S) / (S*S).sum() 
+
+threshold = 0.9
+
+# Plot variance explained
+plt.figure()
+plt.plot(range(1,len(rho)+1),rho,'x-')
+plt.plot(range(1,len(rho)+1),np.cumsum(rho),'o-')
+plt.plot([1,len(rho)],[threshold, threshold],'k--')
+plt.title('Variance explained by principal components');
+plt.xlabel('Principal component');
+plt.ylabel('Variance explained');
+plt.legend(['Individual','Cumulative','Threshold'])
+plt.grid()
+plt.savefig('PCA_variance_explained', dpi=300)
+plt.show()
+##
+
 # Plot PCA of the data
-Z = X @ V[:2,:].T
-plt.scatter(Z[:,0], Z[:,1])
+#Z = X @ V[:3,:].T
+Z = X_normalized @ V[:3,:].T
+#plt.scatter(Z[:,0], Z[:,1], c=y, cmap='Reds')
+fig = plt.figure(figsize=(8,8))
+ax = fig.add_subplot(projection='3d')
+ax.scatter(Z[:,0], Z[:,1], Z[:,2], c=y, cmap='Reds')
+plt.xlabel(r'$v_1$')
+plt.ylabel(r'$v_2$')
+plt.title(r'$v_3$')
 
-##Summary Statistics of the dataset
-Mean=[]
-Variance=[]
-Standard_Deviation=[]
-for i in range(8):
-    Mean.append(X[:,i].mean())
-    Variance.append(X[:,i].var())
-    Standard_Deviation.append(X[:,i].std())
 
-COVariance=np.cov(X.T)
-Correlation=np.corrcoef(X.T)
+plt.savefig('PCA_3D_projection', dpi=300)
+plt.show()
