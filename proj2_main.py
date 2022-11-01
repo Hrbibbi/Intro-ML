@@ -8,6 +8,14 @@ import array_to_latex as a2l
 import sklearn.linear_model as lm
 from sklearn.model_selection import KFold
 from sklearn.metrics import mean_squared_error
+from sklearn import model_selection
+from scipy import stats
+import torch
+
+
+from toolbox_02450 import train_neural_net, draw_neural_net, visualize_decision_boundary
+
+
 # Load data from excel to np.array
 doc = xlrd.open_workbook('./Concrete_Data.xls').sheet_by_index(0)
 
@@ -18,6 +26,7 @@ for i in range(8):
     X[:,i] = np.array(doc.col_values(i,1,1031)).T
 
 y = np.array(doc.col_values(8,1,1031)).T
+#y = np.expand_dims(y,axis=1)
 
 # Normalized data
 N, M = X.shape
@@ -29,12 +38,13 @@ X_normalized = (X - np.ones((N,1))*X.mean(axis=0)) / (np.ones((N,1))*np.std(X, a
 model = lm.LinearRegression()
 model.fit(X_normalized, y)
 
-
 data = np.concatenate((X_normalized, y[:,np.newaxis]), axis=1)
 
 alphas = 10 ** np.linspace(-4,8,13)
 
-'''
+the_table = np.zeros((10,6))
+the_table[:,0] = np.arange(10) + 1
+
 reg_models = []
 for i in range(len(alphas)):
     reg_models.append( lm.Ridge(alpha=alphas[i]) )
@@ -43,7 +53,7 @@ for i in range(len(alphas)):
 
 kf = KFold(n_splits=3)
 tmp = list(kf.split(X_normalized))
-'''
+
 
 
 def train_model(data, train_idx, alpha):
@@ -87,20 +97,18 @@ def base_gen_error(data):
     for train_idx, test_idx in kf.split(data):
         train_mean = np.mean(data[train_idx,-1])
         test_error.append( mean_squared_error( data[test_idx,-1], np.full( (len(test_idx)), train_mean) ) )
-    return sum(test_error)/len(test_error)
+    return test_error
 
-print(base_gen_error(data))
-
-### ANN
-
+base_test_errors = base_gen_error(data)
+the_table[:,5] = base_test_errors
 
 
-### two-level CV
+### linear two-level CV
 K1, K2 = 10, 10
 outer_kf = KFold(n_splits=K1)
 E_val = np.empty((len(alphas), K2))
 E_test = np.empty((K1))
-
+min_alphas = np.empty((K1))
 outer_count = -1
 for par_idx, test_idx in outer_kf.split(data):
     outer_count += 1
@@ -113,17 +121,20 @@ for par_idx, test_idx in outer_kf.split(data):
             E_val[s,inner_count] = test_model(data[par_idx], val_idx, model)
     E_gen = np.mean(E_val, axis=1)
     min_idx = np.argmin(E_gen)
+    min_alphas[outer_count] = alphas[min_idx]
     model_star = train_model(data, par_idx, alphas[min_idx])
     E_test[outer_count] = test_model(data, test_idx, model_star)
     print(f"{round(100*(outer_count+1)/K1)}%")
 print(np.mean(E_test))
 
-'''
+the_table[:,3] = min_alphas
+the_table[:,4] = E_test
+
+
 outer_splits = list(outer_kf.split(data))
 penisring = outer_splits[3][0]
 inner_kf = KFold(n_splits=K2)
 dildo = list(inner_kf.split(penisring))
-'''
 
 
 ### logistic regression
@@ -168,3 +179,201 @@ print(np.mean(E_test))
 
 
 
+
+### ANN
+def ANN_train_model(data, train_idx, h_units):
+    n_hidden_units = h_units     # number of hidden units
+    n_replicates = 1        # number of networks trained in each k-fold
+    max_iter = 10000
+    
+    # Define the model
+    model = lambda: torch.nn.Sequential(
+                        torch.nn.Linear(M, n_hidden_units), #M features to n_hidden_units
+                        torch.nn.Tanh(),   # 1st transfer function,
+                        torch.nn.Linear(n_hidden_units, 1), # n_hidden_units to 1 output neuron
+                        # no final tranfer function, i.e. "linear output"
+                        )
+    loss_fn = torch.nn.MSELoss() # notice how this is now a mean-squared-error loss
+    
+    # Extract training and test set for current CV fold, convert to tensors
+    X_train = torch.Tensor(data[train_idx,:-1])
+    y_train = torch.Tensor(np.expand_dims(data[train_idx,-1],axis=1))
+    
+    # Train the net on training data
+    net, final_loss, learning_curve = train_neural_net(model,
+                                                       loss_fn,
+                                                       X=X_train,
+                                                       y=y_train,
+                                                       n_replicates=n_replicates,
+                                                       max_iter=max_iter)
+    
+    return net
+
+def ANN_test_model(data, test_idx, net):
+    X_test = torch.Tensor(data[test_idx,:-1])
+    y_test = torch.Tensor(np.expand_dims(data[test_idx,-1],axis=1))
+    
+    # Determine estimated class labels for test set
+    y_test_est = net(X_test)
+    
+    # Determine errors and errors
+    se = (y_test_est.float()-y_test.float())**2 # squared error
+    return (sum(se).type(torch.float)/len(y_test)).data.numpy() #mean # MSE
+
+ANN_model = ANN_train_model(data, np.arange(data.shape[0]), 5)
+
+ANN_test_model(data, np.arange(data.shape[0]), ANN_model)
+
+
+### two-level CV
+Hs = np.array([1,5,10,15,20])
+K1, K2 = 10, 10
+outer_kf = KFold(n_splits=K1)
+E_val = np.empty((len(Hs), K2))
+E_test = np.empty((K1))
+min_Hs = np.empty((K1))
+outer_count = -1
+for par_idx, test_idx in outer_kf.split(data):
+    outer_count += 1
+    inner_kf = KFold(n_splits=K2)
+    inner_count = -1
+    for train_idx, val_idx in inner_kf.split(par_idx):
+        inner_count += 1
+        for s in range(len(Hs)):
+            model = ANN_train_model(data[par_idx], train_idx, Hs[s])
+            E_val[s,inner_count] = ANN_test_model(data[par_idx], val_idx, model)
+    E_gen = np.mean(E_val, axis=1)
+    min_idx = np.argmin(E_gen)
+    min_Hs[outer_count] = Hs[min_idx]
+    model_star = ANN_train_model(data, par_idx, Hs[min_idx])
+    E_test[outer_count] = ANN_test_model(data, test_idx, model_star)
+    print(f"{round(100*(outer_count+1)/K1)}%")
+print(np.mean(E_test))
+
+
+ANN_data_arr = np.concatenate( (min_Hs[:,np.newaxis], E_test[:,np.newaxis]), axis=1)
+np.savetxt("ANN_data", ANN_data_arr)
+
+
+the_table[:,1] = min_Hs
+the_table[:,2] = E_test
+
+'''
+###
+# Parameters for neural network classifier
+n_hidden_units = 20     # number of hidden units
+n_replicates = 1        # number of networks trained in each k-fold
+max_iter = 10000
+
+# K-fold crossvalidation
+K = 3                   # only three folds to speed up this example
+CV = model_selection.KFold(K, shuffle=True)
+
+# Setup figure for display of learning curves and error rates in fold
+summaries, summaries_axes = plt.subplots(1,2, figsize=(10,5))
+# Make a list for storing assigned color of learning curve for up to K=10
+color_list = ['tab:orange', 'tab:green', 'tab:purple', 'tab:brown', 'tab:pink',
+              'tab:gray', 'tab:olive', 'tab:cyan', 'tab:red', 'tab:blue']
+# Define the model
+model = lambda: torch.nn.Sequential(
+                    torch.nn.Linear(M, n_hidden_units), #M features to n_hidden_units
+                    torch.nn.Tanh(),   # 1st transfer function,
+                    torch.nn.Linear(n_hidden_units, 1), # n_hidden_units to 1 output neuron
+                    # no final tranfer function, i.e. "linear output"
+                    )
+loss_fn = torch.nn.MSELoss() # notice how this is now a mean-squared-error loss
+
+print('Training model of type:\n\n{}\n'.format(str(model())))
+errors = [] # make a list for storing generalizaition error in each loop
+for (k, (train_index, test_index)) in enumerate(CV.split(X_normalized,y)): 
+    print('\nCrossvalidation fold: {0}/{1}'.format(k+1,K))    
+    
+    # Extract training and test set for current CV fold, convert to tensors
+    X_train = torch.Tensor(X_normalized[train_index,:])
+    y_train = torch.Tensor(y[train_index])
+    X_test = torch.Tensor(X_normalized[test_index,:])
+    y_test = torch.Tensor(y[test_index])
+    
+    # Train the net on training data
+    net, final_loss, learning_curve = train_neural_net(model,
+                                                       loss_fn,
+                                                       X=X_train,
+                                                       y=y_train,
+                                                       n_replicates=n_replicates,
+                                                       max_iter=max_iter)
+    
+    print('\n\tBest loss: {}\n'.format(final_loss))
+    
+    # Determine estimated class labels for test set
+    y_test_est = net(X_test)
+    
+    # Determine errors and errors
+    se = (y_test_est.float()-y_test.float())**2 # squared error
+    mse = (sum(se).type(torch.float)/len(y_test)).data.numpy() #mean
+    errors.append(mse) # store error rate for current CV fold 
+    
+    # Display the learning curve for the best net in the current fold
+    h, = summaries_axes[0].plot(learning_curve, color=color_list[k])
+    h.set_label('CV fold {0}'.format(k+1))
+    summaries_axes[0].set_xlabel('Iterations')
+    summaries_axes[0].set_xlim((0, max_iter))
+    summaries_axes[0].set_ylabel('Loss')
+    summaries_axes[0].set_title('Learning curves')
+
+# Display the MSE across folds
+summaries_axes[1].bar(np.arange(1, K+1), np.squeeze(np.asarray(errors)), color=color_list)
+summaries_axes[1].set_xlabel('Fold')
+summaries_axes[1].set_xticks(np.arange(1, K+1))
+summaries_axes[1].set_ylabel('MSE')
+summaries_axes[1].set_title('Test mean-squared-error')
+    
+print('Diagram of best neural net in last fold:')
+weights = [net[i].weight.data.numpy().T for i in [0,2]]
+biases = [net[i].bias.data.numpy() for i in [0,2]]
+tf =  [str(net[i]) for i in [1,2]]
+draw_neural_net(weights, biases, tf, attribute_names=attributeNames)
+
+# Print the average classification error rate
+print('\nEstimated generalization error, RMSE: {0}'.format(round(np.sqrt(np.mean(errors)), 4)))
+
+# When dealing with regression outputs, a simple way of looking at the quality
+# of predictions visually is by plotting the estimated value as a function of 
+# the true/known value - these values should all be along a straight line "y=x", 
+# and if the points are above the line, the model overestimates, whereas if the
+# points are below the y=x line, then the model underestimates the value
+plt.figure(figsize=(10,10))
+y_est = y_test_est.data.numpy(); y_true = y_test.data.numpy()
+axis_range = [np.min([y_est, y_true])-1,np.max([y_est, y_true])+1]
+plt.plot(axis_range,axis_range,'k--')
+plt.plot(y_true, y_est,'ob',alpha=.25)
+plt.legend(['Perfect estimation','Model estimations'])
+plt.title('Alcohol content: estimated versus true value (for last CV-fold)')
+plt.ylim(axis_range); plt.xlim(axis_range)
+plt.xlabel('True value')
+plt.ylabel('Estimated value')
+plt.grid()
+
+plt.show()
+###
+'''
+
+from scipy.stats import t
+
+nu = 10-1
+r = np.empty((10))
+K = KFold(n_splits=10, shuffle=True)
+count = -1
+for train_idx, test_idx in K.split(data):
+    count += 1
+    lin_model = train_model(data, train_idx, 1)
+    net_model = ANN_train_model(data, train_idx, 2)
+    r[count] = test_model(data, test_idx, lin_model) - ANN_test_model(data, test_idx, net_model)
+r_hat = np.mean(r)
+s_hat = np.std(r)
+s_tilde = np.sqrt( (1/10 + 1/(10-1)) ) * s_hat
+
+sig_level = 0.05
+conf_int = [t.ppf(sig_level/2, nu), t.ppf(1-sig_level/2, nu)]
+t_hat = r_hat/s_tilde
+
+t.cdf(t_hat, nu)
